@@ -9,6 +9,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose
 from sensor_msgs.msg import PointCloud2, PointField
+import os
 
 NUM_PARTICLES = 100
 MAP_X_BOUNDS = [-5, 5]
@@ -19,7 +20,8 @@ MOTION_NOISE_STD = [0.05, 0.05, 0.05]
 # Sensor: error in observation [x (m), y (m), theta (rad)]
 SENSOR_NOISE_STD = [0.1, 0.1, 0.1] 
 
-csv_data = np.genfromtxt("landmarks.csv", delimiter=',')
+script_dir = os.path.dirname(os.path.realpath(__file__))
+csv_data = np.genfromtxt(os.path.join(script_dir, "landmarks.csv"), delimiter=',')
 LANDMARKS_GT = {id: (x,y) for (id, x, y) in csv_data}
 
 def normalize_angles(angles):
@@ -83,10 +85,10 @@ class MCLNode(Node):
         
         # Map field names to offsets
         offsets = {f.name: f.offset for f in msg.fields}
-        required = ['x', 'y', 'theta', 'id']
+        required = ['x', 'y', 'z', 'id']
         
         if not all(field in offsets for field in required):
-            self.get_logger().warn("PointCloud2 missing required fields (x, y, theta, id)")
+            self.get_logger().warn("PointCloud2 missing required fields (x, y, z, id)")
             return
 
         num_points = msg.width * msg.height
@@ -96,7 +98,7 @@ class MCLNode(Node):
             # Unpack float32s
             x = struct.unpack_from('f', data, base + offsets['x'])[0]
             y = struct.unpack_from('f', data, base + offsets['y'])[0]
-            theta = struct.unpack_from('f', data, base + offsets['theta'])[0]
+            theta = 0.0
             l_id = struct.unpack_from('f', data, base + offsets['id'])[0]
             
             parsed_landmarks.append([x, y, theta, int(l_id)])
@@ -202,7 +204,8 @@ class MCLNode(Node):
             if obs_id not in landmarks_gt:
                 continue
                 
-            gt_x, gt_y, gt_theta = landmarks_gt[obs_id]
+            gt_x, gt_y = landmarks_gt[obs_id]
+            gt_theta = 0.0
 
             # Vectorized Expected Measurement
             dx_glob = gt_x - p_x
