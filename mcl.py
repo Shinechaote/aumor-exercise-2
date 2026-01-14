@@ -6,41 +6,89 @@ from scipy.stats import norm
 # ROS Imports
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose
 from sensor_msgs.msg import PointCloud2, PointField
 import os
 
+# ------------------------------------------------------------------
+# CONFIGURATION
+# ------------------------------------------------------------------
 NUM_PARTICLES = 100
-MAP_X_BOUNDS = [-5, 5]
-MAP_Y_BOUNDS = [-5, 5]
-
 # Motion: error per odometry step [x (m), y (m), theta (rad)]
 MOTION_NOISE_STD = [0.05, 0.05, 0.05] 
 # Sensor: error in observation [x (m), y (m), theta (rad)]
 SENSOR_NOISE_STD = [0.1, 0.1, 0.1] 
 
-script_dir = os.path.dirname(os.path.realpath(__file__))
-csv_data = np.genfromtxt(os.path.join(script_dir, "landmarks.csv"), delimiter=',')
-LANDMARKS_GT = {id: (x,y) for (id, x, y) in csv_data}
-
+# ------------------------------------------------------------------
+# HELPER FUNCTIONS
+# ------------------------------------------------------------------
 def normalize_angles(angles):
-    """Normalizes angles to range [-pi, pi] for both scalars and arrays."""
     return np.arctan2(np.sin(angles), np.cos(angles))
+
+def particles_to_pointcloud2(particles, header):
+    """
+    Converts a numpy array of particles [x, y, theta] into a PointCloud2 message.
+    We map:
+    - Particle X -> Point X
+    - Particle Y -> Point Y
+    - 0.0        -> Point Z
+    - Particle Theta -> Intensity (optional, allows coloring by angle in RViz)
+    """
+    msg = PointCloud2()
+    msg.header = header
+    msg.height = 1
+    msg.width = len(particles)
+    
+    # Define the data structure: x (float32), y (float32), z (float32), intensity (float32)
+    # We use 'intensity' to store theta so you can visualize orientation via color
+    msg.fields = [
+        PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+        PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+        PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+        PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+    ]
+    
+    msg.is_bigendian = False
+    msg.point_step = 16 # 4 floats * 4 bytes
+    msg.row_step = msg.point_step * particles.shape[0]
+    msg.is_dense = True
+    
+    # Create the buffer
+    # We need to construct [x, y, 0.0, theta] for every particle
+    buffer = []
+    for p in particles:
+        # struct.pack: 'ffff' means 4 floats
+        buffer.append(struct.pack('ffff', p[0], p[1], 0.0, p[2]))
+        
+    msg.data = b''.join(buffer)
+    return msg
 
 class MCLNode(Node):
     def __init__(self):
         super().__init__('mcl_node')
 
+        self.landmarks_gt, self.map_bounds = self.load_landmarks()
         self.particles, self.weights = self.initialize_particles(NUM_PARTICLES)
-        # Stores list of [x, y, theta, id]
         self.latest_landmarks = [] 
         # To calculate deltas
         self.last_odom_pose = None
 
         # Publishers and Subscribers
-        self.pub_pose = self.create_publisher(PoseWithCovarianceStamped, 'robot_estim', 10)
-        self.pub_particles = self.create_publisher(PoseArray, 'particle_cloud', 10)
+        qos = QoSProfile(depth=10)
+        self.pub_estim_pose = self.create_publisher(
+            Odometry, 
+            '/robot_estimated', 
+            qos
+        )
+        
+        # Second: Particle Cloud -> PointCloud2 (matches your C++ snippet style)
+        self.pub_particle_cloud = self.create_publisher(
+            PointCloud2, 
+            '/particle_cloud', 
+            qos
+        )
         
         self.sub_odom = self.create_subscription(
             Odometry, 
@@ -58,10 +106,27 @@ class MCLNode(Node):
         
         self.get_logger().info("MCL Node Started. Waiting for odometry...")
 
+    def load_landmarks(self):
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        file_path = os.path.join(script_dir, "landmarks.csv")
+        try:
+            csv_data = np.genfromtxt(file_path, delimiter=',')
+            landmarks = {id: (x, y) for (id, x, y) in csv_data}
+            
+            all_x = csv_data[:, 1]
+            all_y = csv_data[:, 2]
+            bounds_x = [np.min(all_x) - 1.0, np.max(all_x) + 1.0]
+            bounds_y = [np.min(all_y) - 1.0, np.max(all_y) + 1.0]
+            return landmarks, (bounds_x, bounds_y)
+        except Exception as e:
+            self.get_logger().warn(f"Could not load landmarks.csv: {e}")
+            return {}, ([-5, 5], [-5, 5])
+
     def initialize_particles(self, num):
         """Spawns particles uniformly in the map bounds."""
-        x = np.random.uniform(MAP_X_BOUNDS[0], MAP_X_BOUNDS[1], (num, 1))
-        y = np.random.uniform(MAP_Y_BOUNDS[0], MAP_Y_BOUNDS[1], (num, 1))
+        bounds_x, bounds_y = self.map_bounds
+        x = np.random.uniform(bounds_x[0], bounds_x[1], (num, 1))
+        y = np.random.uniform(bounds_y[0], bounds_y[1], (num, 1))
         theta = np.random.uniform(-np.pi, np.pi, (num, 1))
         
         particles = np.concatenate((x, y, theta), axis=1)
@@ -147,7 +212,7 @@ class MCLNode(Node):
                 self.particles, 
                 self.weights, 
                 self.latest_landmarks, 
-                LANDMARKS_GT, 
+                self.landmarks_gt, 
                 SENSOR_NOISE_STD
             )
             
@@ -190,40 +255,51 @@ class MCLNode(Node):
         return np.column_stack((new_x, new_y, new_theta))
 
     def measurement_update(self, particles, weights, landmarks_obs, landmarks_gt, noise_std):
+        """
+        Updates weights using 3 distributions: X, Y, and derived Theta.
+        noise_std: [sigma_x, sigma_y, sigma_theta]
+        """
         sig_x, sig_y, sig_theta = noise_std
         
         # Precompute distributions
         dist_x = norm(loc=0, scale=sig_x)
         dist_y = norm(loc=0, scale=sig_y)
+        dist_theta = norm(loc=0, scale=sig_theta)
 
         p_x, p_y, p_theta = particles[:, 0], particles[:, 1], particles[:, 2]
 
         for (obs_x, obs_y, obs_id) in landmarks_obs:
             if obs_id not in landmarks_gt:
                 continue
-                
+            
+            # Extract Observed Theta from x/y (arctan2 already returns normalized angles)
+            obs_theta = np.arctan2(obs_y, obs_x)
+
             gt_x, gt_y = landmarks_gt[obs_id]
 
             # Expected Measurement
             dx_glob = gt_x - p_x
             dy_glob = gt_y - p_y
             
+            # Project to Local Cartesian (Expected X, Y)
             exp_x = dx_glob * np.cos(p_theta) + dy_glob * np.sin(p_theta)
             exp_y = -dx_glob * np.sin(p_theta) + dy_glob * np.cos(p_theta)
+            exp_theta = normalize_angles(np.arctan2(dy_glob, dx_glob) - p_theta)
 
             # Errors
             err_x = obs_x - exp_x
             err_y = obs_y - exp_y
+            err_theta = normalize_angles(obs_theta - exp_theta)
 
             # Likelihood
-            likelihood = dist_x.pdf(err_x) * dist_y.pdf(err_y)
+            likelihood = dist_x.pdf(err_x) * dist_y.pdf(err_y) * dist_theta.pdf(err_theta)
             
             # Update weights
             weights *= likelihood
 
         # Normalize
         w_sum = np.sum(weights)
-        if w_sum > 0:
+        if w_sum > 1e-10:
             weights /= w_sum
         else:
             weights[:] = 1.0 / len(weights) # Reset if all weights are very unlikely
@@ -249,56 +325,33 @@ class MCLNode(Node):
         new_weights = np.ones(N) / N
         return new_particles, new_weights
 
-    def publish_estimated_pose(self, header):
-        # Weighted mean estimate
+def publish_estimated_pose(self, header):
+        # Weighted mean
         mean_x = np.average(self.particles[:, 0], weights=self.weights)
         mean_y = np.average(self.particles[:, 1], weights=self.weights)
-        
-        # Circular mean for angle
         sin_sum = np.sum(np.sin(self.particles[:, 2]) * self.weights)
         cos_sum = np.sum(np.cos(self.particles[:, 2]) * self.weights)
         mean_theta = np.arctan2(sin_sum, cos_sum)
 
-        # Create Message
-        msg = PoseWithCovarianceStamped()
+        msg = Odometry() # PUBLISHING ODOMETRY NOW
         msg.header = header
-        msg.header.frame_id = "map" # Pose is in map frame
+        msg.header.frame_id = "map"
+        msg.child_frame_id = "robot_estimated"
         
         msg.pose.pose.position.x = mean_x
         msg.pose.pose.position.y = mean_y
-        msg.pose.pose.position.z = 0.0
         
-        # Yaw to Quaternion
         cy = math.cos(mean_theta * 0.5)
         sy = math.sin(mean_theta * 0.5)
         msg.pose.pose.orientation.w = cy
         msg.pose.pose.orientation.z = sy
         
-        self.pub_pose.publish(msg)
+        # We leave covariance and twist empty for this simple implementation
+        self.pub_estim_pose.publish(msg)
 
-    def publish_particles(self, header):
-        """Converts numpy particle array to PoseArray and publishes."""
-        msg = PoseArray()
-        msg.header = header
-        msg.header.frame_id = "map" # Particles live in global map frame
-        
-        # We need to iterate to convert theta -> quaternion for each particle
-        # Optimally, this can be vectorized too, but for <1000 particles a loop is fine
-        for p in self.particles:
-            pose = Pose()
-            pose.position.x = p[0]
-            pose.position.y = p[1]
-            pose.position.z = 0.0
-            
-            # Simple yaw -> quaternion
-            cy = math.cos(p[2] * 0.5)
-            sy = math.sin(p[2] * 0.5)
-            pose.orientation.w = cy
-            pose.orientation.z = sy
-            
-            msg.poses.append(pose)
-            
-        self.pub_particles.publish(msg)
+def publish_particle_cloud(self, header):
+    pc2_msg = particles_to_pointcloud2(self.particles, header)
+    self.pub_particle_cloud.publish(pc2_msg)
 
 def main(args=None):
     rclpy.init(args=args)
