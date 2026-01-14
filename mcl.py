@@ -111,7 +111,7 @@ class MCLNode(Node):
         file_path = os.path.join(script_dir, "landmarks.csv")
         try:
             csv_data = np.genfromtxt(file_path, delimiter=',')
-            landmarks = {id: (x, y) for (id, x, y) in csv_data}
+            landmarks = {int(id): (x, y) for (id, x, y) in csv_data}
             
             all_x = csv_data[:, 1]
             all_y = csv_data[:, 2]
