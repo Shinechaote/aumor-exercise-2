@@ -98,10 +98,9 @@ class MCLNode(Node):
             # Unpack float32s
             x = struct.unpack_from('f', data, base + offsets['x'])[0]
             y = struct.unpack_from('f', data, base + offsets['y'])[0]
-            theta = 0.0
             l_id = struct.unpack_from('f', data, base + offsets['id'])[0]
             
-            parsed_landmarks.append([x, y, theta, int(l_id)])
+            parsed_landmarks.append([x, y, int(l_id)])
             
         self.latest_landmarks = parsed_landmarks
 
@@ -196,32 +195,28 @@ class MCLNode(Node):
         # Precompute distributions
         dist_x = norm(loc=0, scale=sig_x)
         dist_y = norm(loc=0, scale=sig_y)
-        dist_theta = norm(loc=0, scale=sig_theta)
 
         p_x, p_y, p_theta = particles[:, 0], particles[:, 1], particles[:, 2]
 
-        for (obs_x, obs_y, obs_theta, obs_id) in landmarks_obs:
+        for (obs_x, obs_y, obs_id) in landmarks_obs:
             if obs_id not in landmarks_gt:
                 continue
                 
             gt_x, gt_y = landmarks_gt[obs_id]
-            gt_theta = 0.0
 
-            # Vectorized Expected Measurement
+            # Expected Measurement
             dx_glob = gt_x - p_x
             dy_glob = gt_y - p_y
             
             exp_x = dx_glob * np.cos(p_theta) + dy_glob * np.sin(p_theta)
             exp_y = -dx_glob * np.sin(p_theta) + dy_glob * np.cos(p_theta)
-            exp_theta = normalize_angles(gt_theta - p_theta)
 
             # Errors
             err_x = obs_x - exp_x
             err_y = obs_y - exp_y
-            err_theta = normalize_angles(obs_theta - exp_theta)
 
             # Likelihood
-            likelihood = dist_x.pdf(err_x) * dist_y.pdf(err_y) * dist_theta.pdf(err_theta)
+            likelihood = dist_x.pdf(err_x) * dist_y.pdf(err_y)
             
             # Update weights
             weights *= likelihood
@@ -231,7 +226,7 @@ class MCLNode(Node):
         if w_sum > 0:
             weights /= w_sum
         else:
-            weights[:] = 1.0 / len(weights) # Reset if lost
+            weights[:] = 1.0 / len(weights) # Reset if all weights are very unlikely
             
         return weights
 
