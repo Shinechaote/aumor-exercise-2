@@ -163,7 +163,7 @@ class MCLNode(Node):
             # Unpack float32s
             x = struct.unpack_from('f', data, base + offsets['x'])[0]
             y = struct.unpack_from('f', data, base + offsets['y'])[0]
-            l_id = struct.unpack_from('f', data, base + offsets['id'])[0]
+            l_id = struct.unpack_from('I', data, base + offsets['id'])[0]
             
             parsed_landmarks.append([x, y, int(l_id)])
             
