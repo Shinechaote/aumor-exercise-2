@@ -287,52 +287,31 @@ class MCLNode(Node):
         Updates weights using 3 distributions: X, Y, and derived Theta.
         noise_std: [sigma_x, sigma_y, sigma_theta]
         """
-        sig_x, sig_y, sig_theta = noise_std
-        
-        # Precompute distributions
-        dist_x = norm(loc=0, scale=sig_x)
-        dist_y = norm(loc=0, scale=sig_y)
-        dist_theta = norm(loc=0, scale=sig_theta)
-
-        p_x, p_y, p_theta = particles[:, 0], particles[:, 1], particles[:, 2]
-
-        for (obs_x, obs_y, obs_id) in landmarks_obs:
-            if obs_id not in landmarks_gt:
-                continue
+        sigma = 0.5 
+        for i, (px, py, ptheta) in enumerate(particles):
+            likelihood = 1.0
+            for lx, ly, lid in landmarks_obs:
+                if lid in self.landmarks:
+                    gt_x, gt_y = self.landmarks[lid]
+                    
+                    dx = gt_x - px
+                    dy = gt_y - py
+                    
+                    tx = dx * np.cos(ptheta) + dy * np.sin(ptheta)
+                    ty = -dx * np.sin(ptheta) + dy * np.cos(ptheta)
+                    
+                    dist_sq = (lx - tx)**2 + (ly - ty)**2
+                    likelihood *= np.exp(-dist_sq / (2 * sigma**2))
             
-            # Extract Observed Theta from x/y (arctan2 already returns normalized angles)
-            obs_theta = np.arctan2(obs_y, obs_x)
+            weights[i] = max(likelihood, 1e-300)
 
-            gt_x, gt_y = landmarks_gt[obs_id]
-
-            # Expected Measurement
-            dx_glob = gt_x - p_x
-            dy_glob = gt_y - p_y
-            
-            # Project to Local Cartesian (Expected X, Y)
-            exp_x = dx_glob * np.cos(p_theta) + dy_glob * np.sin(p_theta)
-            exp_y = -dx_glob * np.sin(p_theta) + dy_glob * np.cos(p_theta)
-            exp_theta = normalize_angles(np.arctan2(dy_glob, dx_glob) - p_theta)
-
-            # Errors
-            err_x = obs_x - exp_x
-            err_y = obs_y - exp_y
-            err_theta = normalize_angles(obs_theta - exp_theta)
-
-            # Likelihood
-            likelihood = dist_x.pdf(err_x) * dist_y.pdf(err_y) * dist_theta.pdf(err_theta)
-            
-            # Update weights
-            weights *= likelihood
-
-        # Normalize
-        w_sum = np.sum(weights)
-        if w_sum > 1e-10:
-            weights /= w_sum
+        total_w = sum(weights)
+        if total_w > 1e-8:
+            for i in range(len(weights)):
+                weights[i] /= total_w
+            particles, weights = self.resample(particles, weights)
         else:
-            weights[:] = 1.0 / len(weights) # Reset if all weights are very unlikely
-            
-        return weights
+            particles, weights = self.initialize_particles(NUM_PARTICLES)
 
     def resample(self, particles, weights):
         N = len(particles)
