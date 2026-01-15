@@ -71,7 +71,7 @@ class MCLNode(Node):
 
         self.landmarks_gt, self.map_bounds = self.load_landmarks()
         self.particles, self.weights = self.initialize_particles(NUM_PARTICLES)
-        self.latest_landmarks = [] 
+        self.landmarks = [] 
         # To calculate deltas
         self.last_odom_pose = None
 
@@ -167,7 +167,7 @@ class MCLNode(Node):
             
             parsed_landmarks.append([x, y, int(l_id)])
             
-        self.latest_landmarks = parsed_landmarks
+        self.landmarks = parsed_landmarks
 
     def publish_estimated_pose(self, header):
             # Weighted mean
@@ -235,11 +235,11 @@ class MCLNode(Node):
         self.particles = self.motion_update(self.particles, [dx_local, dy_local, dtheta], MOTION_NOISE_STD)
 
         # 3. Measurement Update (only if we have landmarks)
-        if self.latest_landmarks:
+        if self.landmarks:
             self.weights = self.measurement_update(
                 self.particles, 
                 self.weights, 
-                self.latest_landmarks, 
+                self.landmarks, 
                 self.landmarks_gt, 
                 SENSOR_NOISE_STD
             )
