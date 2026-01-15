@@ -18,7 +18,7 @@ NUM_PARTICLES = 100
 # Motion: error per odometry step [x (m), y (m), theta (rad)]
 MOTION_NOISE_STD = [0.05, 0.05, 0.05] 
 # Sensor: error in observation [x (m), y (m), theta (rad)]
-SENSOR_NOISE_STD = [0.1, 0.1, 0.1] 
+SENSOR_NOISE_STD = [0.5, 0.5, 0.5] 
 
 # ------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -208,7 +208,7 @@ class MCLNode(Node):
 
         # 4. Publish Results
         self.publish_estimated_pose(msg.header)
-        self.publish_particle_cloud(msg.header) # <--- THIS WAS MISSING
+        self.publish_particle_cloud(msg.header)
         
         self.last_odom_pose = (curr_x, curr_y, curr_theta)
 
@@ -243,6 +243,7 @@ class MCLNode(Node):
         
         # Reset step likelihoods
         step_weights = np.ones_like(weights)
+        debug_printed = False
 
         for (obs_x, obs_y, obs_id) in landmarks_obs:
             # FIX: Check against ground truth map, not observed list
@@ -267,15 +268,19 @@ class MCLNode(Node):
             err_y = obs_y - exp_y
             err_theta = normalize_angles(obs_theta - exp_theta)
 
+            if not debug_printed:
+                self.get_logger().info(f"DEBUG: ObsID: {obs_id} | ErrX: {err_x[0]:.2f}m | ErrY: {err_y[0]:.2f}m")
+                debug_printed = True
+
             # Likelihood
             lik = dist_x.pdf(err_x) * dist_y.pdf(err_y) * dist_theta.pdf(err_theta)
-            step_weights *= lik
+            step_weights *= lik + 1e-9
 
         # Update and Normalize
         weights *= step_weights
         total_w = np.sum(weights)
         
-        if total_w < 1.e-15:
+        if total_w < 1.e-30:
              # Global Localization (Reset)
             self.get_logger().warn("Particles lost! Respawning...")
             # We don't return new particles here, we modify them in place or return updated ones
