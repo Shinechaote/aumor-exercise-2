@@ -336,6 +336,10 @@ class MCLNode(Node):
             err_y = obs_y - exp_y
             err_theta = normalize_angles(obs_theta - exp_theta)
 
+            err_x = np.abs(err_x)
+            err_y = np.abs(err_y)
+            err_theta = np.abs(err_theta)
+
             print(err_x.argmin(), err_y.argmin(), err_theta.argmin())
             print(err_x.min(), err_y.min(), err_theta.min())
 
