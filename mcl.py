@@ -236,7 +236,7 @@ class MCLNode(Node):
 
         # 3. Measurement Update (only if we have landmarks)
         if self.landmarks:
-            self.weights = self.measurement_update(
+            self.particles, self.weights = self.measurement_update(
                 self.particles, 
                 self.weights, 
                 self.landmarks, 
@@ -244,13 +244,7 @@ class MCLNode(Node):
                 SENSOR_NOISE_STD
             )
             
-            # 4. Resample (Adaptive: only if effective particles are low)
-            # Simple check: if weights are too concentrated
-            n_eff = 1.0 / np.sum(self.weights ** 2)
-            if n_eff < NUM_PARTICLES / 2.0:
-                self.particles, self.weights = self.resample(self.particles, self.weights)
-
-        # 5. Publish Estimate
+        # 4. Publish Estimate
         self.publish_estimated_pose(msg.header)
         
         # Update last pose
@@ -312,6 +306,8 @@ class MCLNode(Node):
             particles, weights = self.resample(particles, weights)
         else:
             particles, weights = self.initialize_particles(NUM_PARTICLES)
+
+        return particles, weights
 
     def resample(self, particles, weights):
         N = len(particles)
