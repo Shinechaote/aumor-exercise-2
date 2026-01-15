@@ -93,6 +93,54 @@ class MCLNode(Node):
         )
         
         self.get_logger().info("MCL Node Started. Waiting for odometry...")
+        self.pub_debug_landmarks = self.create_publisher(PointCloud2, '/debug_expected_landmarks', 10)
+
+    def publish_debug_landmarks(self, best_particle, landmarks_gt, header):
+        """
+        Visualizes the expected landmark positions for the best particle.
+        If these don't line up with the sensor's PointCloud, your math is inverted.
+        """
+        px, py, ptheta = best_particle
+        debug_points = []
+        
+        for l_id, (gx, gy) in landmarks_gt.items():
+            # 1. Same Math as Measurement Update
+            dx = gx - px
+            dy = gy - py
+            
+            # Global -> Local Rotation
+            lx = dx * np.cos(ptheta) + dy * np.sin(ptheta)
+            ly = -dx * np.sin(ptheta) + dy * np.cos(ptheta)
+            
+            # Add to list (x, y, z=0, intensity=id)
+            debug_points.append([lx, ly, 0.0, float(l_id)])
+            
+        # Convert to PointCloud2 (Reuse your existing helper, just wrap it)
+        # Note: We need to convert the list 'debug_points' to a numpy array for your helper
+        dummy_particles = np.array([p[:3] for p in debug_points]) 
+        # CAREFUL: Your helper expects [x,y,theta], here we serve [x,y,z]. 
+        # Let's just manually pack it for safety or adjust the helper.
+        
+        # simplified manual pack for debug
+        msg = PointCloud2()
+        msg.header = header
+        msg.height = 1
+        msg.width = len(debug_points)
+        msg.fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+        ]
+        msg.is_bigendian = False
+        msg.point_step = 12
+        msg.row_step = 12 * len(debug_points)
+        msg.is_dense = True
+        buffer = []
+        for p in debug_points:
+            buffer.append(struct.pack('fff', p[0], p[1], 0.0))
+        msg.data = b''.join(buffer)
+        
+        self.pub_debug_landmarks.publish(msg)
 
     def load_landmarks(self):
         script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -209,6 +257,8 @@ class MCLNode(Node):
         # 4. Publish Results
         self.publish_estimated_pose(msg.header)
         self.publish_particle_cloud(msg.header)
+        best_idx = np.argmax(self.weights)
+        self.publish_debug_landmarks(self.particles[best_idx], self.landmarks_gt, msg.header)
         
         self.last_odom_pose = (curr_x, curr_y, curr_theta)
 
