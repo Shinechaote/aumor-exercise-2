@@ -93,7 +93,7 @@ class MCLNode(Node):
         )
         
         self.get_logger().info("MCL Node Started. Waiting for odometry...")
-        self.pub_debug_landmarks = self.create_publisher(PointCloud2, '/debug_expected_landmarks', 10)
+        self.pub_debug_obs = self.create_publisher(PointCloud2, '/debug_expected_landmarks', 10)
 
     def publish_debug_observations(self, best_particle, observations, header):
         """
