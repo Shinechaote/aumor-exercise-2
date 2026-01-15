@@ -325,33 +325,33 @@ class MCLNode(Node):
         new_weights = np.ones(N) / N
         return new_particles, new_weights
 
-def publish_estimated_pose(self, header):
-        # Weighted mean
-        mean_x = np.average(self.particles[:, 0], weights=self.weights)
-        mean_y = np.average(self.particles[:, 1], weights=self.weights)
-        sin_sum = np.sum(np.sin(self.particles[:, 2]) * self.weights)
-        cos_sum = np.sum(np.cos(self.particles[:, 2]) * self.weights)
-        mean_theta = np.arctan2(sin_sum, cos_sum)
+    def publish_estimated_pose(self, header):
+            # Weighted mean
+            mean_x = np.average(self.particles[:, 0], weights=self.weights)
+            mean_y = np.average(self.particles[:, 1], weights=self.weights)
+            sin_sum = np.sum(np.sin(self.particles[:, 2]) * self.weights)
+            cos_sum = np.sum(np.cos(self.particles[:, 2]) * self.weights)
+            mean_theta = np.arctan2(sin_sum, cos_sum)
 
-        msg = Odometry() # PUBLISHING ODOMETRY NOW
-        msg.header = header
-        msg.header.frame_id = "map"
-        msg.child_frame_id = "robot_estimated"
-        
-        msg.pose.pose.position.x = mean_x
-        msg.pose.pose.position.y = mean_y
-        
-        cy = math.cos(mean_theta * 0.5)
-        sy = math.sin(mean_theta * 0.5)
-        msg.pose.pose.orientation.w = cy
-        msg.pose.pose.orientation.z = sy
-        
-        # We leave covariance and twist empty for this simple implementation
-        self.pub_estim_pose.publish(msg)
+            msg = Odometry() # PUBLISHING ODOMETRY NOW
+            msg.header = header
+            msg.header.frame_id = "map"
+            msg.child_frame_id = "robot_estimated"
+            
+            msg.pose.pose.position.x = mean_x
+            msg.pose.pose.position.y = mean_y
+            
+            cy = math.cos(mean_theta * 0.5)
+            sy = math.sin(mean_theta * 0.5)
+            msg.pose.pose.orientation.w = cy
+            msg.pose.pose.orientation.z = sy
+            
+            # We leave covariance and twist empty for this simple implementation
+            self.pub_estim_pose.publish(msg)
 
-def publish_particle_cloud(self, header):
-    pc2_msg = particles_to_pointcloud2(self.particles, header)
-    self.pub_particle_cloud.publish(pc2_msg)
+    def publish_particle_cloud(self, header):
+        pc2_msg = particles_to_pointcloud2(self.particles, header)
+        self.pub_particle_cloud.publish(pc2_msg)
 
 def main(args=None):
     rclpy.init(args=args)
