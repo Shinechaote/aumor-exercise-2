@@ -38,7 +38,8 @@ class MCLNode(Node):
         self.get_logger().info("MCL Node gestartet - Warte auf Konvergenz...")
 
         # Pfad zu den Landmarken
-        csv_path = os.path.expanduser('~/AMR/ex02_v1/src/fake_robot/data/landmarks.csv')
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        csv_path = os.path.join(script_dir, "landmarks.csv")
         try:
             data = np.genfromtxt(csv_path, delimiter=',')
             self.landmarks = {int(row[0]): (row[1], row[2]) for row in data}
