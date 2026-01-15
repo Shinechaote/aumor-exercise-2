@@ -195,7 +195,7 @@ class MCLNode(Node):
             base = i * point_step
             x = struct.unpack_from('f', data, base + offsets['x'])[0]
             y = struct.unpack_from('f', data, base + offsets['y'])[0]
-            l_id = struct.unpack_from('f', data, base + offsets['id'])[0]
+            l_id = struct.unpack_from('I', data, base + offsets['id'])[0]
             parsed_landmarks.append([x, y, int(l_id)])
             
         self.landmarks = parsed_landmarks
@@ -335,13 +335,6 @@ class MCLNode(Node):
             err_x = obs_x - exp_x
             err_y = obs_y - exp_y
             err_theta = normalize_angles(obs_theta - exp_theta)
-
-            err_x = np.abs(err_x)
-            err_y = np.abs(err_y)
-            err_theta = np.abs(err_theta)
-
-            print(err_x.argmin(), err_y.argmin(), err_theta.argmin())
-            print(err_x.min(), err_y.min(), err_theta.min())
 
             # Likelihood
             lik = dist_x.pdf(err_x) * dist_y.pdf(err_y) * dist_theta.pdf(err_theta)
