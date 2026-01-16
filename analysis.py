@@ -3,11 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-from rosbags.rosbag1 import Reader as Reader1  # For ROS1 bags
-from rosbags.rosbag2 import Reader as Reader2  # For ROS2 bags
-from rosbags.serde import deserialize_cdr, ros1_to_cdr
-from rosbags.interfaces import Connection
-import math
+
+# Use the high-level reader which handles deserialization automatically
+from rosbags.highlevel import AnyReader
+from rosbags.typesys import Stores, get_typestore
 
 # -----------------------------------------------------------------------------
 # CONFIGURATION
@@ -114,51 +113,44 @@ def calculate_convergence_time(est_data, gt_data, error_threshold=0.5):
     return float('nan') # Never converged
 
 def read_bag(bag_path):
-    """Reads a single bag file and extracts GT and ESTIMATED poses."""
-    gt_data = []  # [t, x, y, theta]
-    est_data = [] # [t, x, y, theta]
-
-    print(f"Reading: {bag_path}")
+    """
+    Reads a bag file using AnyReader (works for both ROS1 and ROS2).
+    Automatically handles deserialization.
+    """
+    gt_data = []
+    est_data = []
     
+    print(f"Reading: {bag_path}")
+    bag_path_obj = Path(bag_path)
+    
+    # Create a typestore to hold message definitions
+    typestore = get_typestore(Stores.ROS2_KILTED) 
+
     try:
-        # Auto-detect ROS2 bag
-        with Reader2(bag_path) as reader:
+        with AnyReader([bag_path_obj], default_typestore=typestore) as reader:
             for connection, timestamp, rawdata in reader.messages():
-                # msg = deserialize_cdr(rawdata, connection.msgtype)
-                # Note: rosbags requires type registration or manual unpacking
-                # For simplicity, we assume standard nav_msgs/Odometry structure
-                # You might need 'rosbags-convert' or 'rclpy' if msg definitions vary
-                
-                # --- Quick Hack for Standard Types using basic offsets or property access ---
-                # Ideally, use: msg = deserialize_cdr(rawdata, connection.msgtype)
-                # But we need the type definition. 
-                # Let's rely on the fact that rosbags.serde returns a simple object
-                
-                msg = deserialize_cdr(rawdata, connection.msgtype)
-                t_sec = timestamp * 1e-9 # Convert nanoseconds to seconds
+                # Automatic deserialization
+                msg = reader.deserialize(rawdata, connection.msgtype)
+                t_sec = timestamp * 1e-9
 
                 if connection.topic == GT_TOPIC:
-                    # nav_msgs/Odometry
+                    # Expecting nav_msgs/Odometry
                     p = msg.pose.pose.position
                     q = msg.pose.pose.orientation
                     gt_data.append([t_sec, p.x, p.y, get_yaw(q)])
 
                 elif connection.topic == EST_TOPIC:
-                    # Could be Odometry or PoseWithCovarianceStamped
-                    if 'Odometry' in connection.msgtype:
-                        p = msg.pose.pose.position
-                        q = msg.pose.pose.orientation
-                        est_data.append([t_sec, p.x, p.y, get_yaw(q)])
-                    else: # PoseWithCovarianceStamped
+                    # Handles Odometry OR PoseWithCovarianceStamped
+                    if hasattr(msg, 'pose') and hasattr(msg.pose, 'pose'):
+                        # This structure fits both Odometry and PoseWithCovarianceStamped
                         p = msg.pose.pose.position
                         q = msg.pose.pose.orientation
                         est_data.append([t_sec, p.x, p.y, get_yaw(q)])
                         
     except Exception as e:
-        print(f"Error reading bag {bag_path}: {e}")
-
+        print(f"Error reading {bag_path}: {e}")
+        
     return gt_data, est_data
-
 # -----------------------------------------------------------------------------
 # MAIN ANALYSIS LOOP
 # -----------------------------------------------------------------------------
