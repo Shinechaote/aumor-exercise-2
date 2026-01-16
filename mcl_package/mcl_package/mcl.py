@@ -64,6 +64,7 @@ class MCLNode(Node):
         self.last_odom_pose = None
 
         # Publishers and Subscribers
+        # QoSProfile is just there for a nicer visualization
         qos = QoSProfile(depth=10)
         
         self.pub_estim_pose = self.create_publisher(
@@ -93,65 +94,9 @@ class MCLNode(Node):
         )
         
         self.get_logger().info("MCL Node Started. Waiting for odometry...")
-        self.pub_debug_obs = self.create_publisher(PointCloud2, '/debug_expected_landmarks', 10)
-
-    def publish_debug_observations(self, best_particle, observations, header):
-        """
-        Visualizes where the BEST particle thinks the OBSERVED landmarks are.
-        Transform: Local (Sensor) -> Global (Map)
-        """
-        p_x, p_y, p_theta = best_particle
-        
-        debug_points = []
-        
-        for (obs_x, obs_y, obs_id) in observations:
-            # 1. ROTATE (Local -> Global rotation)
-            # Standard Rigid Body Transform:
-            # x_global = x_local * cos(theta) - y_local * sin(theta)
-            # y_global = x_local * sin(theta) + y_local * cos(theta)
-            
-            # Note: obs_x is forward, obs_y is left
-            rot_x = obs_x * np.cos(p_theta) - obs_y * np.sin(p_theta)
-            rot_y = obs_x * np.sin(p_theta) + obs_y * np.cos(p_theta)
-            
-            # 2. TRANSLATE (Add particle position)
-            map_x = p_x + rot_x
-            map_y = p_y + rot_y
-            
-            # Pack for PointCloud2 (x, y, z, intensity=id)
-            debug_points.append([map_x, map_y, 0.0, float(obs_id)])
-            
-        # Convert to PointCloud2
-        # (Reusing the manual packing for simplicity here to ensure no dependency errors)
-        msg = PointCloud2()
-        msg.header = header
-        msg.header.frame_id = "map" # We are publishing into the MAP frame
-        msg.height = 1
-        msg.width = len(debug_points)
-        
-        msg.fields = [
-            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
-            PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
-        ]
-        
-        msg.is_bigendian = False
-        msg.point_step = 16 
-        msg.row_step = 16 * len(debug_points)
-        msg.is_dense = True
-        
-        buffer = []
-        for p in debug_points:
-            buffer.append(struct.pack('ffff', p[0], p[1], p[2], p[3]))
-            
-        msg.data = b''.join(buffer)
-        
-        # You need to create this publisher in __init__:
-        # self.pub_debug_obs = self.create_publisher(PointCloud2, '/debug_obs_global', 10)
-        self.pub_debug_obs.publish(msg)
 
     def load_landmarks(self):
+        # Resolve path of landmarks.csv which should be in the same directory as this script
         script_dir = os.path.dirname(os.path.realpath(__file__))
         file_path = os.path.join(script_dir, "landmarks.csv")
         try:
@@ -164,6 +109,7 @@ class MCLNode(Node):
             
             all_x = csv_data[:, 1]
             all_y = csv_data[:, 2]
+            # We estimate the boundaries of the map by using the bounds of the landmark info we have
             bounds_x = [np.min(all_x) - 1.0, np.max(all_x) + 1.0]
             bounds_y = [np.min(all_y) - 1.0, np.max(all_y) + 1.0]
             return landmarks, (bounds_x, bounds_y)
@@ -172,6 +118,7 @@ class MCLNode(Node):
             return {}, ([-5, 5], [-5, 5])
 
     def initialize_particles(self, num):
+        # Initialize the particles using the map bounds
         bounds_x, bounds_y = self.map_bounds
         x = np.random.uniform(bounds_x[0], bounds_x[1], (num, 1))
         y = np.random.uniform(bounds_y[0], bounds_y[1], (num, 1))
@@ -182,6 +129,7 @@ class MCLNode(Node):
         return particles, weights
 
     def landmarks_callback(self, msg):
+        # This function unpacks the landmarks messages that are unfortunately stored in a weird format.
         parsed_landmarks = []
         point_step = msg.point_step
         data = msg.data
@@ -201,6 +149,7 @@ class MCLNode(Node):
         self.landmarks = parsed_landmarks
 
     def publish_estimated_pose(self, header):
+        # Calculate mean position and theta of particle
         mean_x = np.average(self.particles[:, 0], weights=self.weights)
         mean_y = np.average(self.particles[:, 1], weights=self.weights)
         sin_sum = np.sum(np.sin(self.particles[:, 2]) * self.weights)
@@ -215,6 +164,7 @@ class MCLNode(Node):
         msg.pose.pose.position.x = mean_x
         msg.pose.pose.position.y = mean_y
         
+        # Construct quaternion
         cy = math.cos(mean_theta * 0.5)
         sy = math.sin(mean_theta * 0.5)
         msg.pose.pose.orientation.w = cy
@@ -269,13 +219,6 @@ class MCLNode(Node):
             if n_eff < NUM_PARTICLES / 2.0:
                 self.particles, self.weights = self.resample(self.particles, self.weights)
 
-            best_particle_idx = np.argmax(self.weights)
-            best_particle = self.particles[best_particle_idx]
-
-        # Publish the observations as seen by this specific particle
-        if self.landmarks:
-             self.publish_debug_observations(best_particle, self.landmarks, msg.header)
-
         # 4. Publish Results
         self.publish_estimated_pose(msg.header)
         self.publish_particle_cloud(msg.header)
@@ -283,6 +226,7 @@ class MCLNode(Node):
         self.last_odom_pose = (curr_x, curr_y, curr_theta)
 
     def motion_update(self, particles, control, noise_std):
+        # Initialize Variables for Readability and sample Motion Noise
         dx_l, dy_l, dtheta = control
         sig_x, sig_y, sig_theta = noise_std
         N = len(particles)
@@ -295,6 +239,7 @@ class MCLNode(Node):
         p_y = particles[:, 1]
         p_theta = particles[:, 2]
 
+        # Transform noise into local frame of particles and add to particle
         new_x = p_x + (noisy_dx * np.cos(p_theta) - noisy_dy * np.sin(p_theta))
         new_y = p_y + (noisy_dx * np.sin(p_theta) + noisy_dy * np.cos(p_theta))
         new_theta = normalize_angles(p_theta + noisy_dtheta)
@@ -345,6 +290,7 @@ class MCLNode(Node):
         return weights
 
     def resample(self, particles, weights):
+        # Low-Variance Resampling
         N = len(particles)
         new_particles = np.zeros_like(particles)
         r = np.random.uniform(0, 1.0/N)
@@ -359,6 +305,7 @@ class MCLNode(Node):
         return new_particles, np.ones(N) / N
 
 def main(args=None):
+    # Initialize and start the node
     rclpy.init(args=args)
     node = MCLNode()
     rclpy.spin(node)
