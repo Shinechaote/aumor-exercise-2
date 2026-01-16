@@ -14,11 +14,11 @@ from sensor_msgs.msg import PointCloud2, PointField
 # ------------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------------
-NUM_PARTICLES = 100
+NUM_PARTICLES = 5000
 # Motion: error per odometry step [x (m), y (m), theta (rad)]
-MOTION_NOISE_STD = [0.05, 0.05, 0.05] 
+MOTION_NOISE_STD = [0.5, 0.5, 0.5] 
 # Sensor: error in observation [x (m), y (m), theta (rad)]
-SENSOR_NOISE_STD = [0.1, 0.1, 0.1] 
+SENSOR_NOISE_STD = [0.25, 0.25, 0.25] 
 
 # ------------------------------------------------------------------
 # HELPER FUNCTIONS
